@@ -12,6 +12,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
   :root{
     --teal-deep:#123D38;
@@ -58,6 +60,18 @@
   }
   .hamburger-btn{
     position:absolute; top:20px; left:16px;
+    background:rgba(243,236,218,0.12);
+    border:1px solid rgba(243,236,218,0.28);
+    color:var(--paper);
+    width:40px; height:40px;
+    border-radius:11px;
+    font-size:17px;
+    cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+    z-index:5;
+  }
+  .map-btn{
+    position:absolute; top:20px; right:16px;
     background:rgba(243,236,218,0.12);
     border:1px solid rgba(243,236,218,0.28);
     color:var(--paper);
@@ -467,6 +481,50 @@
   @keyframes tabFade{ from{opacity:0; transform:translateX(10px);} to{opacity:1; transform:translateX(0);} }
   @media (prefers-reduced-motion: reduce){ #list{ animation:none; } }
 
+  .pending-banner{
+    margin:0 16px 14px;
+    background:#FDF2DC;
+    border:1px solid #E8C87A;
+    color:#7A5A0F;
+    font-size:12.5px;
+    font-weight:600;
+    padding:9px 12px;
+    border-radius:10px;
+    text-align:center;
+  }
+
+  .map-overlay{
+    position:fixed; inset:0; z-index:60;
+    background:var(--paper);
+    display:none;
+    flex-direction:column;
+  }
+  .map-overlay.open{display:flex;}
+  .map-header{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 16px; background:var(--teal-deep); color:var(--paper);
+    flex-shrink:0;
+  }
+  .map-header h2{
+    font-family:'Special Elite', monospace; font-weight:400; font-size:18px; margin:0;
+  }
+  .map-close{
+    background:rgba(243,236,218,0.14); border:1px solid rgba(243,236,218,0.28);
+    color:var(--paper); width:34px; height:34px; border-radius:9px;
+    font-size:15px; cursor:pointer; display:flex; align-items:center; justify-content:center;
+  }
+  #mapContainer{flex:1; width:100%;}
+  .map-offline{
+    flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    padding:30px; text-align:center; color:#5b6a68;
+  }
+  .map-offline .big{font-size:38px; display:block; margin-bottom:12px;}
+  .leaflet-popup-content{ font-family:'IBM Plex Sans', sans-serif; }
+  .popup-species{ font-family:'Special Elite', monospace; font-size:15px; color:var(--teal-deep); margin:0 0 4px; }
+  .popup-meta{ font-size:12px; color:#5b6a68; margin:0 0 6px; }
+  .popup-photo{ width:100%; max-height:110px; object-fit:cover; border-radius:6px; margin-bottom:6px; }
+  .popup-link{ display:inline-block; font-size:12.5px; color:var(--brass-dark); font-weight:600; text-decoration:underline; cursor:pointer; }
+
   .lightbox{
     position:fixed; inset:0; background:rgba(10,16,15,0.9);
     display:none; align-items:center; justify-content:center;
@@ -486,6 +544,7 @@
 <div class="app">
   <header class="cover">
     <button class="hamburger-btn" id="menuBtn" aria-label="Options">☰</button>
+    <button class="map-btn" id="mapBtn" aria-label="Carte des prises">🗺️</button>
     <div class="cover-eyebrow"><span class="dot"></span> Journal personnel</div>
     <h1 class="cover-title">Carnet de Pêche</h1>
     <div class="tabs">
@@ -495,6 +554,7 @@
   </header>
 
   <div class="stats" id="stats"></div>
+  <div class="pending-banner" id="pendingBanner" style="display:none;"></div>
 
   <main>
     <div class="toolbar" id="toolbarPrises">
@@ -508,6 +568,20 @@
 </div>
 
 <button class="fab" id="openAdd">🎣 <span id="fabLabel">Nouvelle prise</span></button>
+
+<!-- Carte des prises géolocalisées -->
+<div class="map-overlay" id="mapOverlay">
+  <div class="map-header">
+    <h2>Carte des prises</h2>
+    <button class="map-close" id="mapCloseBtn" aria-label="Fermer">✕</button>
+  </div>
+  <div id="mapContainer"></div>
+  <div class="map-offline" id="mapOffline" style="display:none;">
+    <span class="big">📡</span>
+    <p>La carte a besoin d'une connexion internet pour s'afficher.</p>
+    <p class="hint" style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:var(--brass-dark);">Tes points GPS restent enregistrés — reconnecte-toi pour les voir sur la carte.</p>
+  </div>
+</div>
 
 <!-- Menu options (hamburger) -->
 <div class="overlay" id="menuOverlay">
@@ -853,6 +927,9 @@ function fromDbOuting(row){
 // ---------- Synchronisation ----------
 async function syncFromCloud(){
   try{
+    // 1) On pousse d'abord tout ce qui était en attente hors-ligne, pour ne jamais rien perdre
+    await flushPendingOps();
+
     const [{ data: catchRows, error: err1 }, { data: outingRows, error: err2 }] = await Promise.all([
       sb.from("catches").select("*"),
       sb.from("outings").select("*")
@@ -863,11 +940,23 @@ async function syncFromCloud(){
     const localPhotos = {};
     catches.forEach(c=>{ if(c.photo) localPhotos[c.id] = c.photo; });
 
-    catches = (catchRows||[]).map(row=>{
+    let mergedCatches = (catchRows||[]).map(row=>{
       const c = fromDbCatch(row);
       c.photo = localPhotos[c.id] || null;
       return c;
     });
+
+    // Filet de sécurité : si une prise locale n'est toujours pas remontée sur le cloud
+    // (échec d'envoi malgré tout), on la garde plutôt que de risquer de la perdre
+    const remoteIds = new Set(mergedCatches.map(c=>c.id));
+    const stillPendingIds = loadPending().filter(op => op.table === "catches").map(op=>op.id);
+    catches.forEach(c=>{
+      if(!remoteIds.has(c.id) && stillPendingIds.includes(c.id)){
+        mergedCatches.push(c);
+      }
+    });
+
+    catches = mergedCatches;
     outings = (outingRows||[]).map(fromDbOuting);
 
     saveCatches();
@@ -875,7 +964,6 @@ async function syncFromCloud(){
     renderAll();
 
     restoreMissingPhotos();
-    flushPendingOps();
   }catch(err){
     console.warn("Synchronisation impossible (hors-ligne ?)", err);
   }
@@ -927,7 +1015,20 @@ async function deletePhotoFromStorage(path){
 function loadPending(){
   try{ return JSON.parse(localStorage.getItem(PENDING_KEY)) || []; }catch(e){ return []; }
 }
-function savePending(list){ localStorage.setItem(PENDING_KEY, JSON.stringify(list)); }
+function savePending(list){
+  localStorage.setItem(PENDING_KEY, JSON.stringify(list));
+  updatePendingBanner(list.length);
+}
+function updatePendingBanner(count){
+  const el = document.getElementById("pendingBanner");
+  if(!el) return;
+  if(count > 0){
+    el.style.display = "block";
+    el.textContent = `⏳ ${count} sauvegarde${count>1?"s":""} en attente d'envoi vers le cloud — ne vide pas les données du site tant que ce message est affiché`;
+  }else{
+    el.style.display = "none";
+  }
+}
 function queuePending(op){
   const list = loadPending().filter(o => !(o.table===op.table && o.id===op.id));
   list.push(op);
@@ -1542,6 +1643,80 @@ async function deleteOuting(id){
   }
 }
 
+// ---------- Carte des prises ----------
+let leafletMap = null;
+let leafletMarkers = null;
+
+function openMap(){
+  document.getElementById("mapOverlay").classList.add("open");
+  if(!navigator.onLine){
+    document.getElementById("mapContainer").style.display = "none";
+    document.getElementById("mapOffline").style.display = "flex";
+    return;
+  }
+  document.getElementById("mapContainer").style.display = "block";
+  document.getElementById("mapOffline").style.display = "none";
+
+  if(!leafletMap){
+    leafletMap = L.map("mapContainer");
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
+      maxZoom: 19
+    }).addTo(leafletMap);
+    leafletMarkers = L.layerGroup().addTo(leafletMap);
+  }
+
+  buildMapMarkers();
+
+  setTimeout(()=>{ leafletMap.invalidateSize(); }, 80);
+}
+
+function closeMap(){
+  document.getElementById("mapOverlay").classList.remove("open");
+}
+
+function buildMapMarkers(){
+  if(!leafletMap || !leafletMarkers) return;
+  leafletMarkers.clearLayers();
+
+  const pts = catches.filter(c => c.lat != null && c.lng != null && c.lat !== "" && c.lng !== "");
+
+  if(pts.length === 0){
+    leafletMap.setView([46.6, 2.5], 5); // vue générale France par défaut
+    return;
+  }
+
+  pts.forEach(c=>{
+    const marker = L.marker([c.lat, c.lng]);
+    const popupHtml = `
+      <div>
+        ${c.photo ? `<img class="popup-photo" src="${c.photo}" alt="">` : ""}
+        <p class="popup-species">${escapeHtml(c.espece)}</p>
+        <p class="popup-meta">📅 ${fmtDate(c.date)}${c.taille ? " · "+parseFloat(c.taille)+" cm" : ""}</p>
+        ${c.lieu ? `<p class="popup-meta">📍 ${escapeHtml(c.lieu)}</p>` : ""}
+        <a class="popup-link" onclick="openCatchFromMap('${c.id}')">Voir la fiche complète →</a>
+      </div>
+    `;
+    marker.bindPopup(popupHtml);
+    marker.addTo(leafletMarkers);
+  });
+
+  const group = L.featureGroup(pts.map(c => L.marker([c.lat, c.lng])));
+  leafletMap.fitBounds(group.getBounds().pad(0.2), { maxZoom: 14 });
+}
+
+function openCatchFromMap(id){
+  closeMap();
+  switchTab("prises");
+  editCatch(id);
+}
+
+document.getElementById("mapBtn").addEventListener("click", openMap);
+document.getElementById("mapCloseBtn").addEventListener("click", closeMap);
+window.addEventListener("online", ()=>{
+  if(document.getElementById("mapOverlay").classList.contains("open")) openMap();
+});
+
 // ---------- Menu (hamburger) ----------
 document.getElementById("menuBtn").addEventListener("click", ()=>{
   document.getElementById("menuOverlay").classList.add("open");
@@ -1588,6 +1763,40 @@ function exportData(){
   a.click();
   URL.revokeObjectURL(url);
 }
+function isValidUUID(str){
+  return typeof str === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+}
+function normalizeImportedCatch(c){
+  return {
+    id: isValidUUID(c.id) ? c.id : uid(),
+    espece: c.espece || "",
+    date: c.date || "",
+    heure: c.heure || "",
+    lieu: c.lieu || "",
+    taille: c.taille || "",
+    meteo: c.meteo || "",
+    techMouche: !!c.techMouche,
+    techLeurre: !!c.techLeurre,
+    techniqueLibre: c.techniqueLibre || "",
+    technique: c.technique || "",
+    notes: c.notes || "",
+    photo: c.photo || null,
+    photoPath: c.photoPath || null,
+    lat: c.lat != null ? c.lat : null,
+    lng: c.lng != null ? c.lng : null
+  };
+}
+function normalizeImportedOuting(o){
+  return {
+    id: isValidUUID(o.id) ? o.id : uid(),
+    date: o.date || "",
+    heures: o.heures || "",
+    libre: o.libre || 0,
+    bredouille: !!o.bredouille,
+    notes: o.notes || ""
+  };
+}
+
 function importData(){
   const input = document.createElement("input");
   input.type = "file";
@@ -1596,20 +1805,55 @@ function importData(){
     const file = e.target.files[0];
     if(!file) return;
     const reader = new FileReader();
-    reader.onload = (ev)=>{
+    reader.onload = async (ev)=>{
       try{
         const imported = JSON.parse(ev.target.result);
+        let importedCatches = [];
+        let importedOutings = [];
         if(Array.isArray(imported)){
-          // ancien format : uniquement les prises
-          catches = imported;
+          importedCatches = imported; // ancien format : uniquement les prises
         }else if(imported && typeof imported === "object"){
-          catches = Array.isArray(imported.catches) ? imported.catches : catches;
-          outings = Array.isArray(imported.outings) ? imported.outings : outings;
+          importedCatches = Array.isArray(imported.catches) ? imported.catches : [];
+          importedOutings = Array.isArray(imported.outings) ? imported.outings : [];
         }
+
+        const normCatches = importedCatches.map(normalizeImportedCatch);
+        const normOutings = importedOutings.map(normalizeImportedOuting);
+
+        normCatches.forEach(nc=>{
+          const idx = catches.findIndex(c=>c.id===nc.id);
+          if(idx>=0) catches[idx] = nc; else catches.push(nc);
+        });
+        normOutings.forEach(no=>{
+          const idx = outings.findIndex(o=>o.id===no.id);
+          if(idx>=0) outings[idx] = no; else outings.push(no);
+        });
+
         saveCatches();
         saveOutings();
         renderAll();
-        showToast("Import réussi");
+        showToast(`Import réussi (${normCatches.length} prise(s), ${normOutings.length} sortie(s)) — envoi vers le cloud…`);
+
+        // Synchronisation de tout ce qui vient d'être importé, avec file d'attente en secours
+        for(const c of normCatches){
+          const dbRow = toDbCatch(c);
+          if(navigator.onLine && currentUser){
+            try{ const { error } = await sb.from("catches").upsert(dbRow); if(error) throw error; }
+            catch(err){ queuePending({table:"catches", action:"upsert", id:c.id, payload:dbRow}); }
+          }else{
+            queuePending({table:"catches", action:"upsert", id:c.id, payload:dbRow});
+          }
+        }
+        for(const o of normOutings){
+          const dbRow = toDbOuting(o);
+          if(navigator.onLine && currentUser){
+            try{ const { error } = await sb.from("outings").upsert(dbRow); if(error) throw error; }
+            catch(err){ queuePending({table:"outings", action:"upsert", id:o.id, payload:dbRow}); }
+          }else{
+            queuePending({table:"outings", action:"upsert", id:o.id, payload:dbRow});
+          }
+        }
+        if(loadPending().length === 0) showToast("Import synchronisé avec le cloud ✓");
       }catch(err){
         alert("Fichier invalide.");
       }
@@ -1623,6 +1867,7 @@ function importData(){
 buildSpeciesPicker();
 loadData();
 renderAll();
+updatePendingBanner(loadPending().length);
 initAuth();
 
 if("serviceWorker" in navigator){
