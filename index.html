@@ -1049,6 +1049,10 @@ function queuePending(op){
   list.push(op);
   savePending(list);
 }
+function clearPendingFor(table, id){
+  const list = loadPending().filter(o => !(o.table===table && o.id===id));
+  savePending(list);
+}
 async function flushPendingOps(){
   if(!currentUser || !navigator.onLine) return;
   const list = loadPending();
@@ -1538,15 +1542,19 @@ async function deleteCatch(id){
   if(removed && removed.photoPath && navigator.onLine){
     deletePhotoFromStorage(removed.photoPath).catch(()=>{});
   }
+
+  // On mémorise d'abord la suppression, avant même de tenter l'envoi :
+  // si la page se ferme en plein milieu, elle sera reprise au prochain démarrage.
+  queuePending({table:"catches", action:"delete", id});
+
   if(navigator.onLine && currentUser){
     try{
       const { error } = await sb.from("catches").delete().eq("id", id);
       if(error) throw error;
+      clearPendingFor("catches", id);
     }catch(err){
-      queuePending({table:"catches", action:"delete", id});
+      // reste en file d'attente, sera retenté automatiquement
     }
-  }else{
-    queuePending({table:"catches", action:"delete", id});
   }
 }
 
@@ -1677,16 +1685,17 @@ document.getElementById("catchForm").addEventListener("submit", async (e)=>{
   showToast(editingId ? "Prise mise à jour" : "Prise enregistrée");
 
   const dbRow = toDbCatch(data);
+  // On mémorise d'abord l'envoi en attente, avant même de tenter la requête :
+  // si la page se ferme en plein milieu, elle sera reprise au prochain démarrage.
+  queuePending({table:"catches", action:"upsert", id, payload:dbRow, needsPhotoUpload, photoBase64:photoBase64ToQueue});
   if(navigator.onLine && currentUser){
     try{
       const { error } = await sb.from("catches").upsert(dbRow);
       if(error) throw error;
-      if(needsPhotoUpload) queuePending({table:"catches", action:"upsert", id, payload:dbRow, needsPhotoUpload:true, photoBase64:photoBase64ToQueue});
+      if(!needsPhotoUpload) clearPendingFor("catches", id);
     }catch(err){
-      queuePending({table:"catches", action:"upsert", id, payload:dbRow, needsPhotoUpload, photoBase64:photoBase64ToQueue});
+      // reste en file d'attente, sera retenté automatiquement
     }
-  }else{
-    queuePending({table:"catches", action:"upsert", id, payload:dbRow, needsPhotoUpload, photoBase64:photoBase64ToQueue});
   }
 });
 
@@ -1724,15 +1733,15 @@ document.getElementById("outingForm").addEventListener("submit", async (e)=>{
   showToast(outingEditingId ? "Sortie mise à jour" : "Sortie enregistrée");
 
   const dbRow = toDbOuting(data);
+  queuePending({table:"outings", action:"upsert", id:data.id, payload:dbRow});
   if(navigator.onLine && currentUser){
     try{
       const { error } = await sb.from("outings").upsert(dbRow);
       if(error) throw error;
+      clearPendingFor("outings", data.id);
     }catch(err){
-      queuePending({table:"outings", action:"upsert", id:data.id, payload:dbRow});
+      // reste en file d'attente, sera retenté automatiquement
     }
-  }else{
-    queuePending({table:"outings", action:"upsert", id:data.id, payload:dbRow});
   }
 });
 
@@ -1756,15 +1765,16 @@ async function deleteOuting(id){
   renderAll();
   showToast("Sortie supprimée");
 
+  queuePending({table:"outings", action:"delete", id});
+
   if(navigator.onLine && currentUser){
     try{
       const { error } = await sb.from("outings").delete().eq("id", id);
       if(error) throw error;
+      clearPendingFor("outings", id);
     }catch(err){
-      queuePending({table:"outings", action:"delete", id});
+      // reste en file d'attente, sera retenté automatiquement
     }
-  }else{
-    queuePending({table:"outings", action:"delete", id});
   }
 }
 
