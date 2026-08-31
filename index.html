@@ -1046,15 +1046,22 @@ async function retryPhotoRestore(id){
   }
 }
 
-async function uploadPhoto(catchId, base64){
+async function uploadPhoto(catchId, base64, notifyOnError){
   if(!currentUser) return null;
   try{
     const blob = await (await fetch(base64)).blob();
     const path = `${currentUser.id}/${catchId}.jpg`;
     const { error } = await sb.storage.from("catch-photos").upload(path, blob, { upsert:true, contentType:"image/jpeg" });
-    if(error){ console.warn("Upload photo échoué", error); return null; }
+    if(error){
+      console.warn("Upload photo échoué", error);
+      if(notifyOnError) showToast("⚠️ Photo non envoyée vers le cloud (réessai automatique plus tard)");
+      return null;
+    }
     return path;
-  }catch(e){ return null; }
+  }catch(e){
+    if(notifyOnError) showToast("⚠️ Photo non envoyée vers le cloud (réessai automatique plus tard)");
+    return null;
+  }
 }
 async function deletePhotoFromStorage(path){
   try{ await sb.storage.from("catch-photos").remove([path]); }catch(e){}
@@ -1673,7 +1680,7 @@ document.getElementById("catchForm").addEventListener("submit", async (e)=>{
   if(photoChanged){
     if(currentPhotoData){
       if(navigator.onLine){
-        const uploaded = await uploadPhoto(id, currentPhotoData);
+        const uploaded = await uploadPhoto(id, currentPhotoData, true);
         if(uploaded){ photoPath = uploaded; }
         else { needsPhotoUpload = true; photoBase64ToQueue = currentPhotoData; }
       }else{
