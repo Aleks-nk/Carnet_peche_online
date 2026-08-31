@@ -275,6 +275,17 @@
     cursor:pointer;
     display:block;
   }
+  .catch-photo-pending{
+    margin-top:10px;
+    padding:14px;
+    text-align:center;
+    background:var(--paper);
+    border:1px dashed var(--brass);
+    border-radius:10px;
+    font-size:12.5px;
+    color:var(--brass-dark);
+    cursor:pointer;
+  }
   .catch-actions{
     display:flex; gap:6px; margin-top:10px; flex-wrap:wrap;
   }
@@ -1012,6 +1023,29 @@ async function restoreMissingPhotos(){
   }
 }
 
+async function retryPhotoRestore(id){
+  const c = catches.find(x=>x.id===id);
+  if(!c || !c.photoPath) return;
+  if(!navigator.onLine){
+    showToast("Pas de connexion — réessaie plus tard");
+    return;
+  }
+  showToast("Récupération de la photo…");
+  try{
+    const { data, error } = await sb.storage.from("catch-photos").createSignedUrl(c.photoPath, 3600);
+    if(error || !data) throw error || new Error("Signed URL indisponible");
+    const resp = await fetch(data.signedUrl);
+    if(!resp.ok) throw new Error("Téléchargement échoué");
+    const blob = await resp.blob();
+    c.photo = await blobToBase64(blob);
+    saveCatches();
+    renderAll();
+    showToast("Photo récupérée ✓");
+  }catch(e){
+    showToast("Photo indisponible pour l'instant — connexion faible ?");
+  }
+}
+
 async function uploadPhoto(catchId, base64){
   if(!currentUser) return null;
   try{
@@ -1082,7 +1116,10 @@ async function flushPendingOps(){
   savePending(remaining);
   if(list.length > 0 && remaining.length === 0) showToast("Synchronisé avec le cloud ✓");
 }
-window.addEventListener("online", flushPendingOps);
+window.addEventListener("online", ()=>{
+  flushPendingOps();
+  restoreMissingPhotos();
+});
 
 function uid(){
   if(window.crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -1229,7 +1266,9 @@ function renderCatchList(){
           </div>
         </div>
       </div>
-      ${c.photo ? `<img class="catch-photo" src="${c.photo}" onclick="openLightbox('${c.id}')" alt="Photo de la prise">` : ""}
+      ${c.photo
+        ? `<img class="catch-photo" src="${c.photo}" onclick="openLightbox('${c.id}')" alt="Photo de la prise">`
+        : (c.photoPath ? `<div class="catch-photo-pending" onclick="retryPhotoRestore('${c.id}')">📥 Photo pas encore chargée — toucher pour réessayer</div>` : "")}
       ${c.notes ? `<div class="catch-notes">${escapeHtml(c.notes)}</div>` : ""}
       <div class="catch-actions">
         <button class="icon-btn" onclick="editCatch('${c.id}')">✏️ Modifier</button>
