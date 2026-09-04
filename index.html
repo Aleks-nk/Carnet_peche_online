@@ -1046,6 +1046,129 @@ async function retryPhotoRestore(id){
   }
 }
 
+// ---------- Partage d'une prise (image composite -> partage natif / Instagram) ----------
+function loadImageEl(src){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    img.onload = ()=>resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+function drawImageCover(ctx, img, x, y, w, h){
+  const imgRatio = img.width / img.height;
+  const boxRatio = w / h;
+  let sx, sy, sw, sh;
+  if(imgRatio > boxRatio){
+    sh = img.height; sw = sh * boxRatio; sx = (img.width - sw)/2; sy = 0;
+  }else{
+    sw = img.width; sh = sw / boxRatio; sx = 0; sy = (img.height - sh)/2;
+  }
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+}
+function fitText(ctx, text, maxWidth){
+  if(ctx.measureText(text).width <= maxWidth) return text;
+  let t = text;
+  while(t.length > 1 && ctx.measureText(t+"…").width > maxWidth){
+    t = t.slice(0, -1);
+  }
+  return t + "…";
+}
+
+async function generateShareImage(c){
+  if(document.fonts && document.fonts.ready) await document.fonts.ready;
+
+  const W = 1080, H = 1350;
+  const canvas = document.createElement("canvas");
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext("2d");
+
+  ctx.fillStyle = "#123D38";
+  ctx.fillRect(0, 0, W, H);
+
+  const photoH = Math.round(H * 0.72);
+  const img = await loadImageEl(c.photo);
+  drawImageCover(ctx, img, 0, 0, W, photoH);
+
+  const bandY = photoH;
+  ctx.fillStyle = "#F3ECDA";
+  ctx.fillRect(0, bandY, W, H - bandY);
+
+  const marginX = 48;
+  const maxW = W - marginX*2;
+  ctx.textBaseline = "top";
+
+  ctx.fillStyle = "#123D38";
+  ctx.font = "60px 'Special Elite', monospace";
+  ctx.fillText(fitText(ctx, c.espece || "Prise", maxW), marginX, bandY + 36);
+
+  const infoParts = [];
+  if(c.taille) infoParts.push(`${parseFloat(c.taille)} cm`);
+  if(c.lieu) infoParts.push(c.lieu);
+  if(c.date) infoParts.push(fmtDate(c.date));
+  ctx.font = "32px 'IBM Plex Sans', sans-serif";
+  ctx.fillStyle = "#3a2f22";
+  ctx.fillText(fitText(ctx, infoParts.join("   ·   "), maxW), marginX, bandY + 120);
+
+  const meteoParts = [];
+  if(c.weatherCode != null) meteoParts.push(weatherCodeLabel(c.weatherCode));
+  else if(c.meteo) meteoParts.push(c.meteo);
+  if(c.temperature != null) meteoParts.push(`${Math.round(c.temperature)}°C`);
+  if(c.pressure != null) meteoParts.push(`${Math.round(c.pressure)} hPa`);
+  if(meteoParts.length){
+    ctx.font = "28px 'IBM Plex Mono', monospace";
+    ctx.fillStyle = "#93672F";
+    ctx.fillText(fitText(ctx, meteoParts.join("   ·   "), maxW), marginX, bandY + 178);
+  }
+
+  ctx.font = "24px 'IBM Plex Mono', monospace";
+  ctx.fillStyle = "#93672F";
+  ctx.textAlign = "right";
+  ctx.fillText("🎣 Carnet de Pêche", W - marginX, H - 56);
+  ctx.textAlign = "left";
+
+  return new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.92));
+}
+
+async function shareCatch(id){
+  const c = catches.find(x=>x.id===id);
+  if(!c) return;
+  if(!c.photo){
+    showToast("Ajoute (ou recharge) une photo sur cette prise pour pouvoir la partager");
+    return;
+  }
+  showToast("Préparation de l'image…");
+  let blob;
+  try{
+    blob = await generateShareImage(c);
+  }catch(e){
+    showToast("Impossible de générer l'image de partage");
+    return;
+  }
+  const filename = `peche-${(c.espece||"prise").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]+/g,"-")}.jpg`;
+  const file = new File([blob], filename, { type: "image/jpeg" });
+
+  let canShareFiles = false;
+  try{ canShareFiles = !!(navigator.canShare && navigator.canShare({ files:[file] })); }catch(e){}
+
+  if(navigator.share && canShareFiles){
+    try{
+      await navigator.share({ files:[file], title: c.espece || "Ma prise" });
+      return;
+    }catch(shareErr){
+      if(shareErr && shareErr.name === "AbortError") return;
+    }
+  }
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast("Image téléchargée — ouvre-la depuis Instagram pour la partager");
+}
+
 async function uploadPhoto(catchId, base64, notifyOnError){
   if(!currentUser) return null;
   try{
@@ -1279,6 +1402,7 @@ function renderCatchList(){
       ${c.notes ? `<div class="catch-notes">${escapeHtml(c.notes)}</div>` : ""}
       <div class="catch-actions">
         <button class="icon-btn" onclick="editCatch('${c.id}')">✏️ Modifier</button>
+        ${c.photo ? `<button class="icon-btn" onclick="shareCatch('${c.id}')">📤 Partager</button>` : ""}
         ${c.lat ? `<a class="icon-btn" href="geo:${c.lat},${c.lng}?q=${c.lat},${c.lng}(${encodeURIComponent(c.espece)})" target="_blank" rel="noopener">🗺️ Voir sur la carte</a>` : ""}
         <button class="icon-btn danger" onclick="deleteCatch('${c.id}')">🗑️ Supprimer</button>
       </div>
