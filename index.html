@@ -1110,6 +1110,15 @@ async function generateShareImage(c){
   ctx.fillStyle = "#3a2f22";
   ctx.fillText(fitText(ctx, infoParts.join("   ·   "), maxW), marginX, bandY + 120);
 
+  let nextY = bandY + 172;
+
+  if(c.technique){
+    ctx.font = "30px 'IBM Plex Sans', sans-serif";
+    ctx.fillStyle = "#123D38";
+    ctx.fillText("🎣 " + fitText(ctx, c.technique, maxW - 40), marginX, nextY);
+    nextY += 50;
+  }
+
   const meteoParts = [];
   if(c.weatherCode != null) meteoParts.push(weatherCodeLabel(c.weatherCode));
   else if(c.meteo) meteoParts.push(c.meteo);
@@ -1118,7 +1127,7 @@ async function generateShareImage(c){
   if(meteoParts.length){
     ctx.font = "28px 'IBM Plex Mono', monospace";
     ctx.fillStyle = "#93672F";
-    ctx.fillText(fitText(ctx, meteoParts.join("   ·   "), maxW), marginX, bandY + 178);
+    ctx.fillText(fitText(ctx, meteoParts.join("   ·   "), maxW), marginX, nextY);
   }
 
   ctx.font = "24px 'IBM Plex Mono', monospace";
