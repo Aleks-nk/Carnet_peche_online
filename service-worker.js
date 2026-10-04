@@ -1,4 +1,13 @@
-const CACHE_NAME = "carnet-peche-v21";
+const CACHE_NAME = "carnet-peche-v22";
+
+// Domaines dont les réponses ne doivent JAMAIS être mises en cache :
+// ce sont des données dynamiques (prises, sorties, météo) qui doivent toujours
+// être fraîches. Les mettre en cache a provoqué un bug où les nouvelles prises
+// n'apparaissaient plus tant que le cache n'était pas vidé manuellement.
+const NEVER_CACHE_HOSTS = [
+  "supabase.co",
+  "open-meteo.com"
+];
 const ASSETS = [
   "./",
   "./index.html",
@@ -37,7 +46,16 @@ self.addEventListener("activate", (event) => {
 });
 
 // Stratégie : cache d'abord, réseau en secours (utile pour les polices Google la première fois)
+// SAUF pour Supabase/Open-Meteo, toujours interrogés directement en réseau (jamais de cache).
 self.addEventListener("fetch", (event) => {
+  const url = new URL(event.request.url);
+  const isNeverCache = NEVER_CACHE_HOSTS.some(host => url.hostname.endsWith(host));
+
+  if(isNeverCache){
+    event.respondWith(fetch(event.request));
+    return;
+  }
+
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
