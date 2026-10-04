@@ -1,4 +1,4 @@
-const CACHE_NAME = "carnet-peche-v20";
+const CACHE_NAME = "carnet-peche-v21";
 const ASSETS = [
   "./",
   "./index.html",
@@ -7,10 +7,19 @@ const ASSETS = [
   "./icon-512.png"
 ];
 
-// Installation : on met en cache tout ce qu'il faut pour tourner hors-ligne
+// Installation : on met en cache tout ce qu'il faut pour tourner hors-ligne.
+// IMPORTANT : on force le contournement du cache HTTP du navigateur (cache: "reload"),
+// sinon cache.addAll() peut récupérer une copie périmée d'index.html depuis le cache
+// disque du téléphone au lieu d'aller chercher la vraie dernière version sur le réseau.
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+    caches.open(CACHE_NAME).then(async (cache) => {
+      await Promise.all(ASSETS.map(async (url) => {
+        const request = new Request(url, { cache: "reload" });
+        const response = await fetch(request);
+        await cache.put(url, response);
+      }));
+    })
   );
   self.skipWaiting();
 });
